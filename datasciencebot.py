@@ -1,38 +1,51 @@
+import numpy as np
 import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.grid_search import GridSearchCV
 
 
 class DataScienceBot:
     """
     A pure-python data scientist :-)
     """
-    def __init__(self, input_folder, categorical_variables=None, nan_replacement=None):
+    def __init__(self, categorical_variables=None):
         self.task = None
-        self.input_folder = input_folder
         self.categorical_variables = categorical_variables
-        self.nan_replacement = nan_replacement
-        # invariant parameters
-        self.numerical_types = ['int32', 'int64', 'float32', 'float64']
         # data
         self.X_train = None
         self.y_train = None
+        self.X_valid = None
+        self.y_valid = None
         self.X_test = None
+        # invariant parameters
+        self.numerical_types = ['int32', 'int64', 'float32', 'float64']
+        self.fitted_models = []
+        self.predictions = []
+        self.regression_models = [(LinearRegression, {})]
+        self.classification_models =\
+            [
+            (RandomForestClassifier, {'n_estimators':[10, 50, 100, 250], 'criterion':['gini', 'entropy'],
+                                      'max_features':['auto'],  'max_depth':[2, 3, 4, 5, 6, 7, 8],
+                                      'n_jobs':[1], 'random_state':[42], 'class_weight':['balanced']})
+            ]
 
-    def load_data(self):
+    def load_data(self, input_folder):
         """
         Loads pickled data from input folder
         """
-        self.X_train = pd.read_pickle(self.input_folder + '/X_train.pkl')
-        self.y_train = pd.read_pickle(self.input_folder + '/y_train.pkl')
-        self.X_test = pd.read_pickle(self.input_folder + '/X_test.pkl')
+        self.X_train = pd.read_pickle(input_folder + '/X_train.pkl')
+        self.y_train = pd.read_pickle(input_folder + '/y_train.pkl')
+        self.X_test = pd.read_pickle(input_folder + '/X_test.pkl')
         # detects the type of task to perform
         if self.y_train.nunique() / self.y_train.shape[0] < 0.1:
             self.task = 'classification'
         else:
             self.task = 'regression'
 
-    def preprocess_data(self):
+    def preprocess_data(self, nan_replacement=None):
         """
-        Preprocess the data
+        Pre-process the data
         """
         # detects categorical variables
         if self.categorical_variables is None:
@@ -43,8 +56,8 @@ class DataScienceBot:
             self.categorical_variables = variables
 
         # fills NaN values
-        self.X_train.fillna(self.nan_replacement)
-        self.X_test.fillna(self.nan_replacement)
+        self.X_train = self.X_train.fillna(nan_replacement)
+        self.X_test = self.X_test.fillna(nan_replacement)
 
         # replaces them by dummy ones
         x = pd.concat((self.X_train[self.categorical_variables], self.X_test[self.categorical_variables]))
@@ -54,19 +67,40 @@ class DataScienceBot:
         self.X_train = pd.concat((self.X_train, x_dummies.iloc[:self.X_train.shape[0]]), axis=1)
         self.X_test = self.X_test.drop(self.categorical_variables, axis=1)
         self.X_test = pd.concat((self.X_test, x_dummies.iloc[self.X_train.shape[0]:]), axis=1)
-        self.categorical_variables = self.X_train.columns[n_cols:]
+        self.categorical_variables = self.X_train.columns[n_cols:].tolist()
+
+    def split_train(self, train_size=0.75, seed=42):
+        """
+        Splits the train set into a train and validation sets
+        """
+        n_examples = self.X_train.shape[0]
+        n_train_examples = int(train_size * n_examples)
+        np.random.seed(seed)
+        train_idx = np.random.choice(list(range(n_examples)), n_train_examples, replace=False).tolist()
+        valid_idx = list(set(range(n_examples)).difference(set(train_idx)))
+        self.X_valid = self.X_train.iloc[valid_idx, :].copy()
+        self.X_train = self.X_train.iloc[train_idx, :]
+        self.y_valid = self.y_train.iloc[valid_idx]
+        self.y_train = self.y_train.iloc[train_idx]
 
     def fit(self):
         """
         Fit various models to the training set
         """
-        return self.task
+        self.fitted_models = []
+        if self.task == 'classification':
+            for (model, parameters) in self.classification_models:
+                clf = GridSearchCV(model(), parameters, n_jobs=1, cv=2, verbose=10)
+                clf.fit(self.X_train, self.y_train)
+                self.fitted_models.append(clf)
 
-    def predict(self):
+    def predict(self, X):
         """
         Makes predictions on the test set
         """
-        return self.task
+        self.predictions = []
+        for model in self.fitted_models:
+            self.predictions.append(model.predict(X))
 
 
 if __name__ == '__main__':
@@ -84,13 +118,18 @@ if __name__ == '__main__':
                      'Medical_History_26', 'Medical_History_27', 'Medical_History_28', 'Medical_History_29',
                      'Medical_History_30', 'Medical_History_31', 'Medical_History_33', 'Medical_History_34',
                      'Medical_History_35', 'Medical_History_36', 'Medical_History_37']
-    dsb = DataScienceBot('/Users/roms/GitHub/Automated-Data-Scientist/Data_sample',
-                         categorical_variables=cat_variables,
-                         nan_replacement=-1)
-    dsb.load_data()
+    dsb = DataScienceBot(categorical_variables=cat_variables)
+    dsb.load_data(input_folder='/Users/roms/GitHub/Automated-Data-Scientist/Data_sample')
     print(dsb.categorical_variables)
-    dsb.preprocess_data()
+    dsb.preprocess_data(nan_replacement=-1)
     print(dsb.categorical_variables)
-    #dsb.fit()
-    #predictions = dsb.predict()
+    dsb.split_train(train_size=.75)
+    dsb.fit()
+    dsb.predict(dsb.X_test)
+    dsb.predictions[0].shape
+    pd.DataFrame(dsb.predictions[0], index=dsb.X_test.Id, columns=['Response']).to_csv('submission.csv')
     #predictions.to_csv('predictions.csv')
+
+"""
+TO DO: prendre en compte l'Id au chargement du fichier!!
+"""
